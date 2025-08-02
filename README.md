@@ -12,7 +12,54 @@ This repository contains a modular AWS infrastructure deployment using Terragrun
 - **Automated Management**: Infrastructure lifecycle automation
 - **Compliance Ready**: Follows AWS security best practices
 
+## Requirements
+
+| Name | Version |
+|------|---------|
+| terraform | = 1.13.0 |
+| terragrunt | = 0.84.0 |
+| aws | = 6.2.0 |
+| azure | = 4.38.1 |
+
+## Providers
+
+| Name | Version |
+|------|---------|
+| aws | = 6.2.0 |
+| azure | = 4.38.1 |
+
 ## 🗺️ Resource Map
+
+### Core Infrastructure Resources
+
+| Resource Type | Description | Module Path | Managed By |
+|--------------|-------------|-------------|------------|
+| VPC | Main VPC in eu-west-1 | `network/vpc` | Terragrunt |
+| Public Subnets | For internet-facing resources | `network/vpc` | Terragrunt |
+| Private Subnets | For internal resources | `network/vpc` | Terragrunt |
+| Security Groups | Network access control | `network/security_groups` | Terragrunt |
+| NAT Gateways | For private subnet internet access | `network/vpc` | Terragrunt |
+| Internet Gateway | For public internet access | `network/vpc` | Terragrunt |
+
+### Compute & Storage Resources
+
+| Resource Type | Description | Module Path | Managed By |
+|--------------|-------------|-------------|------------|
+| EC2 Instances | Application servers | `compute/ec2` | Terragrunt |
+| Auto Scaling Groups | EC2 scaling management | `compute/ec2` | Terragrunt |
+| EBS Volumes | EC2 storage | `compute/ec2` | Terragrunt |
+| S3 Buckets | Object storage | `storage/s3` | Terragrunt |
+| RDS Instances | PostgreSQL databases | `database/rds` | Terragrunt |
+
+### Security & IAM Resources
+
+| Resource Type | Description | Module Path | Managed By |
+|--------------|-------------|-------------|------------|
+| IAM Roles | Service roles | `security/iam` | Terragrunt |
+| KMS Keys | Encryption keys | `security/kms` | Terragrunt |
+| Systems Manager | Instance management | `compute/ec2` | Terragrunt |
+
+### Architectural Diagram
 
 ```mermaid
 graph TB
@@ -100,8 +147,10 @@ graph TB
 
 ### Prerequisites
 
-- Terraform >= 1.0.0
+- Terraform = 1.13.0
 - Terragrunt = 0.84.0
+- AWS Provider = 6.2.0
+- Azure Provider = 4.38.1
 - AWS CLI configured with appropriate credentials
 
 ### Initial Setup
@@ -157,14 +206,6 @@ terragrunt-catherine/
 │   │   └── iam/                # IAM roles and policies
 │   └── storage/
 │       └── s3/                 # S3 buckets with versioning
-│   │   └── rds/                 # RDS instances
-│   ├── network/
-│   │   ├── security_groups/     # Security Groups
-│   │   └── vpc/                 # VPC configuration
-│   ├── security/
-│   │   └── iam/                 # IAM roles and policies
-│   └── storage/
-│       └── s3/                  # S3 buckets
 ```
 
 ## 🔒 Security Controls
@@ -207,36 +248,102 @@ terragrunt-catherine/
 4. **Storage Layer**
    - S3 buckets require KMS keys
    - Logging buckets must exist first
-   - IAM roles needed for access
+
+## Inputs
+
+| Name | Description | Type | Default | Required |
+|------|-------------|------|---------|:--------:|
+| environment | Environment (dev, staging, prod) | `string` | `"dev"` | yes |
+| aws_region | AWS region to deploy into | `string` | `"eu-west-1"` | yes |
+| vpc_cidr | CIDR block for VPC | `string` | `"10.0.0.0/16"` | yes |
+| enable_vpc_flow_logs | Enable VPC flow logs | `bool` | `true` | no |
+| instance_type | EC2 instance type | `string` | `"t3.micro"` | no |
+| rds_instance_class | RDS instance class | `string` | `"db.t3.medium"` | no |
+
+## Outputs
+
+| Name | Description |
+|------|-------------|
+| vpc_id | ID of the created VPC |
+| private_subnet_ids | List of IDs of private subnets |
+| public_subnet_ids | List of IDs of public subnets |
+| rds_endpoint | Endpoint for RDS instance |
+| ec2_instance_ips | List of EC2 instance private IPs |
+
+## Examples
+
+### Basic Usage
+
+```hcl
+# Example of deploying basic infrastructure
+include {
+  path = find_in_parent_folders()
+}
+
+inputs = {
+  environment = "dev"
+  vpc_cidr = "10.0.0.0/16"
+  enable_vpc_flow_logs = true
+  instance_type = "t3.micro"
+}
+```
+
+### Production Configuration
+
+```hcl
+# Example of production environment setup
+include {
+  path = find_in_parent_folders()
+}
+
+inputs = {
+  environment = "prod"
+  vpc_cidr = "10.1.0.0/16"
+  enable_vpc_flow_logs = true
+  instance_type = "t3.large"
+  rds_instance_class = "db.t3.large"
+}
+```
 
 ## 🚀 Deployment Strategy
 
-1. Infrastructure is deployed in the following order:
-   - Network resources
-   - Security configurations
-   - Storage resources
-   - Database layer
-   - Compute resources
-
-2. Each component can be deployed independently using:
+1. **Infrastructure Order**
    ```bash
-   terragrunt plan
+   # 1. Network Layer
+   cd network/vpc
+   terragrunt apply
+   
+   # 2. Security Groups
+   cd ../security_groups
+   terragrunt apply
+   
+   # 3. Database Layer
+   cd ../../database/rds
+   terragrunt apply
+   
+   # 4. Compute Layer
+   cd ../../compute/ec2
    terragrunt apply
    ```
 
-## 🔍 Monitoring & Maintenance
+2. **Validation Steps**
+   - Verify VPC and subnet creation
+   - Confirm security group rules
+   - Test database connectivity
+   - Validate EC2 instance access
 
-- CloudWatch metrics enabled for all resources
-- VPC flow logs for network monitoring
-- RDS enhanced monitoring enabled
-- Auto Scaling metrics collected
-- Regular backup and snapshot schedule
+## Contributing
 
-## 🏷️ Resource Tagging
+1. Fork the repository
+2. Create a feature branch
+3. Commit your changes
+4. Push to the branch
+5. Create a Pull Request
 
-All resources are tagged with:
-- Environment
-- Project
-- Owner
-- CostCenter
-- ManagedBy: "terragrunt"
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Authors
+
+* **Catherine** - *Initial work* - [catherinevee](https://github.com/catherinevee)

@@ -30,6 +30,10 @@ terraform {
       source  = "hashicorp/aws"
       version = "6.2.0"
     }
+    azurerm = {
+      source  = "hashicorp/azurerm"
+      version = "4.38.1"
+    }
   }
 }
 
@@ -39,6 +43,10 @@ provider "aws" {
   default_tags {
     tags = ${jsonencode(local.common_tags)}
   }
+}
+
+provider "azurerm" {
+  features {}
 }
 EOF
 }
