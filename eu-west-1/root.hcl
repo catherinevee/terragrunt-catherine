@@ -12,9 +12,14 @@ locals {
   
   # Define common tags
   common_tags = {
-    Environment = local.environment
-    ManagedBy   = "Terragrunt"
-    Owner       = "DevOps"
+    Environment        = local.environment
+    ManagedBy         = "Terragrunt"
+    Owner             = "DevOps"
+    Project           = "MainApp"
+    CostCenter        = get_env("TF_VAR_cost_center", "IT-Infrastructure")
+    DataClassification = "internal"
+    BackupSchedule    = "daily"
+    CreatedBy         = get_env("USER", "terragrunt")
   }
 }
 
@@ -30,10 +35,6 @@ terraform {
       source  = "hashicorp/aws"
       version = "6.2.0"
     }
-    azurerm = {
-      source  = "hashicorp/azurerm"
-      version = "4.38.1"
-    }
   }
 }
 
@@ -43,10 +44,6 @@ provider "aws" {
   default_tags {
     tags = ${jsonencode(local.common_tags)}
   }
-}
-
-provider "azurerm" {
-  features {}
 }
 EOF
 }
@@ -59,7 +56,21 @@ remote_state {
     key            = "${path_relative_to_include()}/terraform.tfstate"
     region         = local.aws_region
     encrypt        = true
+    kms_key_id     = get_env("TF_VAR_kms_key_id", "alias/terraform-state-key")
     dynamodb_table = "terraform-locks"
+    
+    # Security configurations
+    skip_bucket_ssencryption           = false
+    skip_bucket_enforced_tls           = false
+    skip_bucket_public_access_blocking = false
+    skip_bucket_root_access            = false
+    enable_lock_table_ssencryption     = true
+    
+    # S3 bucket tags
+    s3_bucket_tags = merge(local.common_tags, {
+      Purpose = "TerraformState"
+      Security = "encrypted"
+    })
     
     tags = local.common_tags
   }

@@ -1,16 +1,14 @@
 # Terragrunt Catherine - AWS Infrastructure
 
-This repository contains a modular AWS infrastructure deployment using Terragrunt for better code organization and reusability. The infrastructure is designed following AWS best practices for security, scalability, and maintainability.
+Modular AWS infrastructure deployment using Terragrunt. Built for the eu-west-1 region with multi-AZ deployment for production workloads.
 
-## 🎯 Key Features
+## Key Features
 
-- **Modular Infrastructure**: Components are organized into reusable modules
-- **Infrastructure as Code**: Version-controlled using Terragrunt and Terraform
-- **Security First**: Built-in security controls and encryption
-- **High Availability**: Resources deployed across multiple availability zones
-- **Cost Optimization**: Resource sizing based on requirements
-- **Automated Management**: Infrastructure lifecycle automation
-- **Compliance Ready**: Follows AWS security best practices
+- Separated state files by service boundary for team isolation
+- KMS encryption for all data at rest
+- VPC Flow Logs enabled for network monitoring
+- Auto Scaling Groups configured for high availability
+- Systems Manager used instead of SSH access
 
 ## Requirements
 
@@ -28,49 +26,49 @@ This repository contains a modular AWS infrastructure deployment using Terragrun
 | aws | = 6.2.0 |
 | azure | = 4.38.1 |
 
-## 🗺️ Resource Map
+## Resource Map
 
-### Core Infrastructure Resources
+### Network Infrastructure
 
-| Resource Type | Description | Module Path | Managed By |
-|--------------|-------------|-------------|------------|
-| VPC | Main VPC in eu-west-1 | `network/vpc` | Terragrunt |
-| Public Subnets | For internet-facing resources | `network/vpc` | Terragrunt |
-| Private Subnets | For internal resources | `network/vpc` | Terragrunt |
-| Security Groups | Network access control | `network/security_groups` | Terragrunt |
-| NAT Gateways | For private subnet internet access | `network/vpc` | Terragrunt |
-| Internet Gateway | For public internet access | `network/vpc` | Terragrunt |
+| Resource Type | Description | Module Path |
+|--------------|-------------|-------------|
+| VPC | Main VPC in eu-west-1 | `network/vpc` |
+| Public Subnets | Internet-facing resources | `network/vpc` |
+| Private Subnets | Internal resources | `network/vpc` |
+| Security Groups | Network access control | `network/security_groups` |
+| NAT Gateways | Private subnet internet access | `network/vpc` |
+| Internet Gateway | Public internet access | `network/vpc` |
 
-### Compute & Storage Resources
+### Compute & Storage
 
-| Resource Type | Description | Module Path | Managed By |
-|--------------|-------------|-------------|------------|
-| EC2 Instances | Application servers | `compute/ec2` | Terragrunt |
-| Auto Scaling Groups | EC2 scaling management | `compute/ec2` | Terragrunt |
-| EBS Volumes | EC2 storage | `compute/ec2` | Terragrunt |
-| S3 Buckets | Object storage | `storage/s3` | Terragrunt |
-| RDS Instances | PostgreSQL databases | `database/rds` | Terragrunt |
+| Resource Type | Description | Module Path |
+|--------------|-------------|-------------|
+| EC2 Instances | Application servers | `compute/ec2` |
+| Auto Scaling Groups | EC2 scaling management | `compute/ec2` |
+| EBS Volumes | EC2 storage | `compute/ec2` |
+| S3 Buckets | Object storage | `storage/s3` |
+| RDS Instances | PostgreSQL databases | `database/rds` |
 
-### Security & IAM Resources
+### Security & IAM
 
-| Resource Type | Description | Module Path | Managed By |
-|--------------|-------------|-------------|------------|
-| IAM Roles | Service roles | `security/iam` | Terragrunt |
-| KMS Keys | Encryption keys | `security/kms` | Terragrunt |
-| Systems Manager | Instance management | `compute/ec2` | Terragrunt |
+| Resource Type | Description | Module Path |
+|--------------|-------------|-------------|
+| IAM Roles | Service roles | `security/iam` |
+| KMS Keys | Encryption keys | `security/kms` |
+| Systems Manager | Instance management | `compute/ec2` |
 
-### Architectural Diagram
+## Architecture Overview
 
 ```mermaid
 graph TB
-    subgraph Core Network
+    subgraph Network
         VPC[VPC] --> SUBNETS[Private & Public Subnets]
         SUBNETS --> SG[Security Groups]
         SUBNETS --> NGW[NAT Gateways]
         SUBNETS --> IGW[Internet Gateway]
     end
 
-    subgraph Compute Resources
+    subgraph Compute
         EC2[EC2 Instances]
         ASG[Auto Scaling Groups]
         EC2VOL[EBS Volumes]
@@ -103,9 +101,9 @@ graph TB
     end
 ```
 
-## 📊 Resource Configuration Matrix
+## Configuration Details
 
-### Network Configuration
+### Network Setup
 
 | Component | eu-west-1 |
 |-----------|-----------|
@@ -115,7 +113,7 @@ graph TB
 | NAT Gateways | One per AZ |
 | VPC Flow Logs | Enabled |
 
-### Compute Resources
+### Compute
 
 | Component | Specification |
 |-----------|--------------|
@@ -124,7 +122,7 @@ graph TB
 | EBS Volume Types | gp3 |
 | EBS Volume Size | 50GB |
 
-### Database Configuration
+### Database
 
 | Component | Specification |
 |-----------|--------------|
@@ -134,7 +132,7 @@ graph TB
 | Multi-AZ | Yes |
 | Backup Retention | 7 days |
 
-### Security Features
+### Security
 
 | Component | Configuration |
 |-----------|--------------|
@@ -143,7 +141,7 @@ graph TB
 | IAM Roles | Service-specific |
 | SSL/TLS | Required |
 
-## � Getting Started
+## Getting Started
 
 ### Prerequisites
 
@@ -153,7 +151,7 @@ graph TB
 - Azure Provider = 4.38.1
 - AWS CLI configured with appropriate credentials
 
-### Initial Setup
+### Setup
 
 1. Clone the repository:
 ```bash
@@ -161,7 +159,7 @@ git clone https://github.com/catherinevee/terragrunt-catherine.git
 cd terragrunt-catherine
 ```
 
-2. Initialize and apply the infrastructure:
+2. Deploy the infrastructure:
 ```bash
 cd eu-west-1
 terragrunt run-all init
@@ -169,16 +167,15 @@ terragrunt run-all plan
 terragrunt run-all apply
 ```
 
-## 🔐 Security Best Practices
+## Security Implementation
 
 - All data encrypted at rest using KMS
-- Network security groups with minimal access
-- IAM roles following principle of least privilege
+- Security groups use minimal required access
+- IAM roles follow principle of least privilege
 - VPC Flow Logs enabled for network monitoring
-- Regular security patches and updates
-- Secure access via Systems Manager
+- Systems Manager used for instance access (no SSH keys)
 
-## 🔄 Maintenance
+## Maintenance
 
 - Regular infrastructure updates
 - Automated backups and snapshots
@@ -186,7 +183,7 @@ terragrunt run-all apply
 - Cost optimization reviews
 - Security compliance checks
 
-## �📁 Directory Structure
+## Directory Structure
 
 ```
 terragrunt-catherine/
@@ -208,7 +205,7 @@ terragrunt-catherine/
 │       └── s3/                 # S3 buckets with versioning
 ```
 
-## 🔒 Security Controls
+## Security Controls
 
 ### Network Security
 - VPC flow logs enabled
@@ -228,7 +225,7 @@ terragrunt-catherine/
 - No direct SSH access to instances
 - Systems Manager for instance management
 
-## 🔄 Resource Dependencies
+## Resource Dependencies
 
 1. **VPC & Network**
    - VPC must be created first
@@ -305,32 +302,33 @@ inputs = {
 }
 ```
 
-## 🚀 Deployment Strategy
+## Deployment Strategy
 
-1. **Infrastructure Order**
-   ```bash
-   # 1. Network Layer
-   cd network/vpc
-   terragrunt apply
-   
-   # 2. Security Groups
-   cd ../security_groups
-   terragrunt apply
-   
-   # 3. Database Layer
-   cd ../../database/rds
-   terragrunt apply
-   
-   # 4. Compute Layer
-   cd ../../compute/ec2
-   terragrunt apply
-   ```
+Deploy in dependency order to avoid resource creation errors:
 
-2. **Validation Steps**
-   - Verify VPC and subnet creation
-   - Confirm security group rules
-   - Test database connectivity
-   - Validate EC2 instance access
+```bash
+# 1. Network Layer
+cd network/vpc
+terragrunt apply
+
+# 2. Security Groups
+cd ../security_groups
+terragrunt apply
+
+# 3. Database Layer
+cd ../../database/rds
+terragrunt apply
+
+# 4. Compute Layer
+cd ../../compute/ec2
+terragrunt apply
+```
+
+### Validation Steps
+- Verify VPC and subnet creation
+- Confirm security group rules
+- Test database connectivity
+- Validate EC2 instance access
 
 ## Contributing
 

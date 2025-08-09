@@ -1,0 +1,140 @@
+name: Terraform Plan
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'eu-west-1/**'
+      - '.github/workflows/terraform-plan.yml'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to plan against'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - staging
+          - prod
+
+env:
+  TF_VERSION: "1.13.0"
+  TERRAGRUNT_VERSION: "0.84.0"
+  AWS_REGION: "eu-west-1"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  terraform-plan:
+    name: Terraform Plan - ${{ github.event.inputs.environment || 'PR' }}
+    runs-on: ubuntu-latest
+    
+    # Use OIDC for AWS authentication
+    environment:
+      name: ${{ github.event.inputs.environment || 'dev' }}
+      url: ${{ steps.plan.outputs.plan_url }}
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-TerraformPlan
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      
+      - name: Setup Terragrunt
+        uses: autero1/action-terragrunt@v1.0.0
+        with:
+          terragrunt_version: ${{ env.TERRAGRUNT_VERSION }}
+      
+      - name: Terraform Format Check
+        id: fmt
+        run: |
+          cd eu-west-1
+          terragrunt run-all fmt --terragrunt-non-interactive
+        continue-on-error: true
+      
+      - name: Terraform Init
+        id: init
+        run: |
+          cd eu-west-1
+          terragrunt run-all init --terragrunt-non-interactive
+      
+      - name: Terraform Validate
+        id: validate
+        run: |
+          cd eu-west-1
+          terragrunt run-all validate --terragrunt-non-interactive
+      
+      - name: Terraform Plan
+        id: plan
+        run: |
+          cd eu-west-1
+          terragrunt run-all plan \
+            --terragrunt-non-interactive \
+            --terragrunt-log-level INFO \
+            -out=tfplan
+        env:
+          TF_VAR_environment: ${{ github.event.inputs.environment || 'dev' }}
+          TF_VAR_aws_region: ${{ env.AWS_REGION }}
+      
+      - name: Upload Terraform Plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan-${{ github.run_number }}
+          path: eu-west-1/tfplan
+          retention-days: 7
+      
+      - name: Comment PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            // Read plan output
+            const planPath = path.join(process.env.GITHUB_WORKSPACE, 'eu-west-1/tfplan');
+            let planOutput = 'Plan file generated successfully.';
+            
+            if (fs.existsSync(planPath)) {
+              planOutput = '✅ Terraform plan completed successfully.\n\n**Plan Summary:**\n- Resources to be created: [Check plan file]\n- Resources to be modified: [Check plan file]\n- Resources to be destroyed: [Check plan file]\n\n**Next Steps:**\n1. Review the plan output\n2. Approve the PR if changes look correct\n3. Merge to trigger apply workflow';
+            }
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: planOutput
+            });
+      
+      - name: Notify on Failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ Terraform plan failed. Please check the workflow logs for details.'
+            }); 

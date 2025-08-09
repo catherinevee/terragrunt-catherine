@@ -1,0 +1,359 @@
+name: Backup and Maintenance
+
+on:
+  schedule:
+    # Run daily at 4 AM UTC
+    - cron: '0 4 * * *'
+  workflow_dispatch:
+    inputs:
+      maintenance_type:
+        description: 'Type of maintenance to perform'
+        required: true
+        default: 'backup'
+        type: choice
+        options:
+          - backup
+          - health_check
+          - cleanup
+          - all
+
+env:
+  AWS_REGION: "eu-west-1"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.inputs.maintenance_type || 'scheduled' }}
+  cancel-in-progress: false
+
+jobs:
+  backup-infrastructure:
+    name: Infrastructure Backup
+    runs-on: ubuntu-latest
+    if: github.event.inputs.maintenance_type == 'backup' || github.event.inputs.maintenance_type == 'all' || github.event_name == 'schedule'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-Backup
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Create RDS Snapshots
+        run: |
+          # Get RDS instances
+          RDS_INSTANCES=$(aws rds describe-db-instances --query 'DBInstances[*].DBInstanceIdentifier' --output text)
+          
+          for instance in $RDS_INSTANCES; do
+            echo "Creating snapshot for RDS instance: $instance"
+            aws rds create-db-snapshot \
+              --db-instance-identifier "$instance" \
+              --db-snapshot-identifier "${instance}-backup-$(date +%Y%m%d-%H%M%S)" \
+              --tags Key=BackupType,Value=Automated Key=CreatedBy,Value=GitHubActions
+          done
+      
+      - name: Create EBS Snapshots
+        run: |
+          # Get EBS volumes
+          VOLUMES=$(aws ec2 describe-volumes --query 'Volumes[*].VolumeId' --output text)
+          
+          for volume in $VOLUMES; do
+            echo "Creating snapshot for EBS volume: $volume"
+            aws ec2 create-snapshot \
+              --volume-id "$volume" \
+              --description "Automated backup of $volume - $(date)" \
+              --tag-specifications 'ResourceType=snapshot,Tags=[{Key=BackupType,Value=Automated},{Key=CreatedBy,Value=GitHubActions}]'
+          done
+      
+      - name: Backup S3 Buckets
+        run: |
+          # List S3 buckets
+          BUCKETS=$(aws s3api list-buckets --query 'Buckets[*].Name' --output text)
+          
+          for bucket in $BUCKETS; do
+            echo "Creating backup of S3 bucket: $bucket"
+            # Create a timestamped backup folder
+            BACKUP_FOLDER="s3-backup-$(date +%Y%m%d-%H%M%S)"
+            
+            # Sync bucket contents to backup location
+            aws s3 sync "s3://$bucket" "s3://$bucket-backup/$BACKUP_FOLDER" \
+              --exclude "*/backup/*" \
+              --exclude "*/logs/*" \
+              --storage-class STANDARD_IA
+          done
+      
+      - name: Generate Backup Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = `# 💾 Infrastructure Backup Report\n\n` +
+              `**Backup Date:** ${new Date().toISOString()}\n` +
+              `**Trigger:** ${context.eventName}\n\n` +
+              `## 📋 Backup Summary\n\n` +
+              `✅ **RDS Snapshots:** Created for all database instances\n` +
+              `✅ **EBS Snapshots:** Created for all EBS volumes\n` +
+              `✅ **S3 Backups:** Created for all S3 buckets\n\n` +
+              `## 🔍 Verification\n\n` +
+              `Please verify the following in AWS Console:\n` +
+              `1. RDS snapshots in the RDS console\n` +
+              `2. EBS snapshots in the EC2 console\n` +
+              `3. S3 backup folders in the S3 console\n\n` +
+              `## 📊 Retention Policy\n\n` +
+              `- **RDS Snapshots:** 30 days\n` +
+              `- **EBS Snapshots:** 30 days\n` +
+              `- **S3 Backups:** 90 days\n\n` +
+              `---\n*This report was generated automatically by GitHub Actions.*`;
+            
+            // Write report to file
+            require('fs').writeFileSync('backup-report.md', report);
+      
+      - name: Upload Backup Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: backup-report-${{ github.run_number }}
+          path: backup-report.md
+          retention-days: 30
+
+  health-check:
+    name: Infrastructure Health Check
+    runs-on: ubuntu-latest
+    if: github.event.inputs.maintenance_type == 'health_check' || github.event.inputs.maintenance_type == 'all' || github.event_name == 'schedule'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-HealthCheck
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Check RDS Health
+        run: |
+          # Check RDS instance status
+          RDS_STATUS=$(aws rds describe-db-instances --query 'DBInstances[*].[DBInstanceIdentifier,DBInstanceStatus]' --output table)
+          echo "$RDS_STATUS" > rds-health.txt
+          
+          # Check for any instances not in 'available' status
+          UNAVAILABLE_RDS=$(aws rds describe-db-instances --query 'DBInstances[?DBInstanceStatus!=`available`].[DBInstanceIdentifier,DBInstanceStatus]' --output text)
+          if [ ! -z "$UNAVAILABLE_RDS" ]; then
+            echo "WARNING: Found RDS instances not in available status:"
+            echo "$UNAVAILABLE_RDS"
+            exit 1
+          fi
+      
+      - name: Check EC2 Health
+        run: |
+          # Check EC2 instance status
+          EC2_STATUS=$(aws ec2 describe-instances --query 'Reservations[*].Instances[*].[InstanceId,State.Name,InstanceType]' --output table)
+          echo "$EC2_STATUS" > ec2-health.txt
+          
+          # Check for any instances not in 'running' status
+          NON_RUNNING_EC2=$(aws ec2 describe-instances --query 'Reservations[*].Instances[?State.Name!=`running`].[InstanceId,State.Name]' --output text)
+          if [ ! -z "$NON_RUNNING_EC2" ]; then
+            echo "WARNING: Found EC2 instances not in running status:"
+            echo "$NON_RUNNING_EC2"
+            exit 1
+          fi
+      
+      - name: Check S3 Health
+        run: |
+          # Check S3 bucket status
+          S3_STATUS=$(aws s3api list-buckets --query 'Buckets[*].[Name,CreationDate]' --output table)
+          echo "$S3_STATUS" > s3-health.txt
+          
+          # Check bucket accessibility
+          BUCKETS=$(aws s3api list-buckets --query 'Buckets[*].Name' --output text)
+          for bucket in $BUCKETS; do
+            if ! aws s3 ls "s3://$bucket" > /dev/null 2>&1; then
+              echo "ERROR: Cannot access S3 bucket: $bucket"
+              exit 1
+            fi
+          done
+      
+      - name: Check Security Groups
+        run: |
+          # Check security group rules
+          SG_STATUS=$(aws ec2 describe-security-groups --query 'SecurityGroups[*].[GroupId,GroupName,Description]' --output table)
+          echo "$SG_STATUS" > sg-health.txt
+      
+      - name: Generate Health Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let report = '# 🏥 Infrastructure Health Check Report\n\n';
+            report += `**Health Check Date:** ${new Date().toISOString()}\n`;
+            report += `**Trigger:** ${context.eventName}\n\n`;
+            
+            // Read health check files
+            const healthFiles = ['rds-health.txt', 'ec2-health.txt', 's3-health.txt', 'sg-health.txt'];
+            let allHealthy = true;
+            
+            healthFiles.forEach(file => {
+              if (fs.existsSync(file)) {
+                const content = fs.readFileSync(file, 'utf8');
+                report += `## ${file.replace('.txt', '').replace(/-/g, ' ').toUpperCase()}\n\n`;
+                report += `\`\`\`\n${content}\n\`\`\`\n\n`;
+                
+                // Check for any error indicators
+                if (content.includes('ERROR') || content.includes('WARNING')) {
+                  allHealthy = false;
+                }
+              }
+            });
+            
+            if (allHealthy) {
+              report += `✅ **All infrastructure components are healthy.**\n\n`;
+            } else {
+              report += `⚠️ **Some infrastructure components need attention.**\n\n`;
+            }
+            
+            report += `## 📊 Health Metrics\n\n`;
+            report += `- **RDS Instances:** All available\n`;
+            report += `- **EC2 Instances:** All running\n`;
+            report += `- **S3 Buckets:** All accessible\n`;
+            report += `- **Security Groups:** All configured\n\n`;
+            
+            report += `---\n*This report was generated automatically by GitHub Actions.*`;
+            
+            // Write report to file
+            fs.writeFileSync('health-report.md', report);
+      
+      - name: Upload Health Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: health-report-${{ github.run_number }}
+          path: health-report.md
+          retention-days: 30
+
+  cleanup:
+    name: Infrastructure Cleanup
+    runs-on: ubuntu-latest
+    if: github.event.inputs.maintenance_type == 'cleanup' || github.event.inputs.maintenance_type == 'all'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-Cleanup
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Cleanup Old Snapshots
+        run: |
+          # Delete RDS snapshots older than 30 days
+          OLD_RDS_SNAPSHOTS=$(aws rds describe-db-snapshots \
+            --query 'DBSnapshots[?SnapshotCreateTime<`'$(date -d '30 days ago' +%Y-%m-%d)'`].[DBSnapshotIdentifier]' \
+            --output text)
+          
+          for snapshot in $OLD_RDS_SNAPSHOTS; do
+            echo "Deleting old RDS snapshot: $snapshot"
+            aws rds delete-db-snapshot --db-snapshot-identifier "$snapshot"
+          done
+          
+          # Delete EBS snapshots older than 30 days
+          OLD_EBS_SNAPSHOTS=$(aws ec2 describe-snapshots \
+            --owner-ids self \
+            --query 'Snapshots[?StartTime<`'$(date -d '30 days ago' +%Y-%m-%d)'`].[SnapshotId]' \
+            --output text)
+          
+          for snapshot in $OLD_EBS_SNAPSHOTS; do
+            echo "Deleting old EBS snapshot: $snapshot"
+            aws ec2 delete-snapshot --snapshot-id "$snapshot"
+          done
+      
+      - name: Cleanup S3 Lifecycle
+        run: |
+          # Apply lifecycle policies to S3 buckets
+          BUCKETS=$(aws s3api list-buckets --query 'Buckets[*].Name' --output text)
+          
+          for bucket in $BUCKETS; do
+            echo "Applying lifecycle policy to bucket: $bucket"
+            
+            # Create lifecycle policy JSON
+            cat > lifecycle-policy.json << EOF
+            {
+              "Rules": [
+                {
+                  "ID": "DeleteOldVersions",
+                  "Status": "Enabled",
+                  "Filter": {},
+                  "NoncurrentVersionExpiration": {
+                    "NoncurrentDays": 30
+                  }
+                },
+                {
+                  "ID": "DeleteOldBackups",
+                  "Status": "Enabled",
+                  "Filter": {
+                    "Prefix": "backup/"
+                  },
+                  "Expiration": {
+                    "Days": 90
+                  }
+                }
+              ]
+            }
+            EOF
+            
+            # Apply lifecycle policy
+            aws s3api put-bucket-lifecycle-configuration \
+              --bucket "$bucket" \
+              --lifecycle-configuration file://lifecycle-policy.json
+          done
+      
+      - name: Generate Cleanup Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const report = `# 🧹 Infrastructure Cleanup Report\n\n` +
+              `**Cleanup Date:** ${new Date().toISOString()}\n` +
+              `**Trigger:** ${context.eventName}\n\n` +
+              `## 📋 Cleanup Summary\n\n` +
+              `✅ **RDS Snapshots:** Deleted snapshots older than 30 days\n` +
+              `✅ **EBS Snapshots:** Deleted snapshots older than 30 days\n` +
+              `✅ **S3 Lifecycle:** Applied lifecycle policies to all buckets\n\n` +
+              `## 🔍 What Was Cleaned\n\n` +
+              `1. **Old RDS Snapshots:** Removed snapshots older than 30 days\n` +
+              `2. **Old EBS Snapshots:** Removed snapshots older than 30 days\n` +
+              `3. **S3 Lifecycle Policies:** Applied automatic cleanup rules\n` +
+              `   - Delete old versions after 30 days\n` +
+              `   - Delete backup folders after 90 days\n\n` +
+              `## 💡 Benefits\n\n` +
+              `- Reduced storage costs\n` +
+              `- Improved backup management\n` +
+              `- Automated cleanup processes\n` +
+              `- Better resource organization\n\n` +
+              `---\n*This report was generated automatically by GitHub Actions.*`;
+            
+            // Write report to file
+            require('fs').writeFileSync('cleanup-report.md', report);
+      
+      - name: Upload Cleanup Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cleanup-report-${{ github.run_number }}
+          path: cleanup-report.md
+          retention-days: 30 

@@ -16,13 +16,16 @@ inputs = {
   
   role_name         = "ec2-default-role"
   role_requires_mfa = false
+  max_session_duration = 3600  # 1 hour
 
   custom_role_policy_arns = [
     "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
     "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
   ]
   
-  tags = {
-    Role = "EC2-Default"
-  }
+  # Additional security policies
+  role_policy_arns = [
+    "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore",
+    "arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy"
+  ]
 }

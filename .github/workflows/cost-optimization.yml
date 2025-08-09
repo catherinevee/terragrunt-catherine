@@ -1,0 +1,272 @@
+name: Cost Optimization
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'eu-west-1/**'
+      - '.github/workflows/cost-optimization.yml'
+  schedule:
+    # Run cost analysis weekly on Sundays at 3 AM UTC
+    - cron: '0 3 * * 0'
+
+env:
+  TF_VERSION: "1.13.0"
+  TERRAGRUNT_VERSION: "0.84.0"
+  AWS_REGION: "eu-west-1"
+
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
+
+jobs:
+  cost-analysis:
+    name: Infrastructure Cost Analysis
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-CostAnalysis
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      
+      - name: Setup Terragrunt
+        uses: autero1/action-terragrunt@v1.0.0
+        with:
+          terragrunt_version: ${{ env.TERRAGRUNT_VERSION }}
+      
+      - name: Terraform Init
+        run: |
+          cd eu-west-1
+          terragrunt run-all init --terragrunt-non-interactive
+      
+      - name: Run Infracost
+        uses: infracost/actions/comment@v2
+        with:
+          path: eu-west-1
+          terraform_plan_flags: --terragrunt-non-interactive
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          behavior: update
+          target-type: pull-request
+      
+      - name: Generate Cost Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            
+            let report = '# 💰 Cost Optimization Report\n\n';
+            report += `**Analysis Date:** ${new Date().toISOString()}\n`;
+            report += `**Repository:** ${context.repo.owner}/${context.repo.repo}\n`;
+            report += `**Branch:** ${context.ref}\n\n`;
+            
+            // Check if infracost output exists
+            const infracostPath = path.join(process.env.GITHUB_WORKSPACE, 'infracost.json');
+            if (fs.existsSync(infracostPath)) {
+              try {
+                const infracostData = JSON.parse(fs.readFileSync(infracostPath, 'utf8'));
+                const projects = infracostData.projects || [];
+                
+                let totalMonthlyCost = 0;
+                let totalHourlyCost = 0;
+                
+                report += `## 📊 Cost Summary\n\n`;
+                
+                projects.forEach(project => {
+                  const breakdown = project.breakdown || {};
+                  const resources = breakdown.resources || [];
+                  
+                  report += `### ${project.name}\n\n`;
+                  
+                  resources.forEach(resource => {
+                    const cost = resource.cost || {};
+                    const monthlyCost = cost.monthlyCost || 0;
+                    const hourlyCost = cost.hourlyCost || 0;
+                    
+                    totalMonthlyCost += monthlyCost;
+                    totalHourlyCost += hourlyCost;
+                    
+                    if (monthlyCost > 0) {
+                      report += `- **${resource.name}:** $${monthlyCost.toFixed(2)}/month\n`;
+                    }
+                  });
+                  
+                  report += `\n**Total Monthly Cost:** $${totalMonthlyCost.toFixed(2)}\n`;
+                  report += `**Total Hourly Cost:** $${totalHourlyCost.toFixed(4)}\n\n`;
+                });
+                
+                // Cost optimization recommendations
+                report += `## 💡 Cost Optimization Recommendations\n\n`;
+                
+                if (totalMonthlyCost > 1000) {
+                  report += `### High Cost Alert ⚠️\n\n`;
+                  report += `Your infrastructure costs are above $1000/month. Consider:\n`;
+                  report += `- Reviewing instance sizes and types\n`;
+                  report += `- Implementing auto-scaling policies\n`;
+                  report += `- Using reserved instances for predictable workloads\n`;
+                  report += `- Optimizing storage usage\n\n`;
+                }
+                
+                report += `### General Recommendations\n\n`;
+                report += `1. **Use Spot Instances** for non-critical workloads\n`;
+                report += `2. **Implement Auto Scaling** to scale down during low usage\n`;
+                report += `3. **Review Storage Classes** for S3 buckets\n`;
+                report += `4. **Consider Reserved Instances** for predictable workloads\n`;
+                report += `5. **Monitor and Clean Up** unused resources\n`;
+                report += `6. **Use Cost Allocation Tags** for better tracking\n\n`;
+                
+              } catch (error) {
+                report += `❌ Error parsing cost data: ${error.message}\n\n`;
+              }
+            } else {
+              report += `⚠️ No cost data available. Make sure Infracost is properly configured.\n\n`;
+            }
+            
+            report += `## 📋 Next Steps\n\n`;
+            report += `1. Review the detailed cost breakdown above\n`;
+            report += `2. Implement cost optimization recommendations\n`;
+            report += `3. Set up cost alerts in AWS Cost Explorer\n`;
+            report += `4. Regular cost reviews and optimization\n\n`;
+            
+            report += `---\n*This report was generated automatically by GitHub Actions.*`;
+            
+            // Write report to file
+            fs.writeFileSync('cost-report.md', report);
+            
+            // Comment on PR if this is a pull request
+            if (context.eventName === 'pull_request') {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: report
+              });
+            }
+      
+      - name: Upload Cost Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: cost-report-${{ github.run_number }}
+          path: cost-report.md
+          retention-days: 90
+
+  resource-optimization:
+    name: Resource Optimization Check
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          role-session-name: GitHubActions-ResourceOptimization
+          aws-region: ${{ env.AWS_REGION }}
+      
+      - name: Run AWS Cost Explorer Analysis
+        run: |
+          # Get cost data for the last 30 days
+          aws ce get-cost-and-usage \
+            --time-period Start=$(date -d '30 days ago' +%Y-%m-%d),End=$(date +%Y-%m-%d) \
+            --granularity MONTHLY \
+            --metrics BlendedCost \
+            --group-by Type=DIMENSION,Key=SERVICE \
+            --output json > cost-explorer.json
+      
+      - name: Analyze Resource Usage
+        run: |
+          # Check for unused EBS volumes
+          aws ec2 describe-volumes \
+            --filters Name=status,Values=available \
+            --query 'Volumes[*].[VolumeId,Size,CreateTime]' \
+            --output table > unused-volumes.txt
+          
+          # Check for unattached ENIs
+          aws ec2 describe-network-interfaces \
+            --filters Name=attachment.status,Values=detached \
+            --query 'NetworkInterfaces[*].[NetworkInterfaceId,Description]' \
+            --output table > unused-enis.txt
+          
+          # Check for unused security groups
+          aws ec2 describe-security-groups \
+            --query 'SecurityGroups[?length(Attachments)==`0`].[GroupId,GroupName]' \
+            --output table > unused-sgs.txt
+      
+      - name: Generate Optimization Report
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            
+            let report = '# 🔧 Resource Optimization Report\n\n';
+            report += `**Analysis Date:** ${new Date().toISOString()}\n\n`;
+            
+            // Check for unused resources
+            const files = ['unused-volumes.txt', 'unused-enis.txt', 'unused-sgs.txt'];
+            let hasUnusedResources = false;
+            
+            files.forEach(file => {
+              if (fs.existsSync(file)) {
+                const content = fs.readFileSync(file, 'utf8');
+                if (content.trim() && !content.includes('None')) {
+                  hasUnusedResources = true;
+                  report += `## 🗑️ Unused Resources Found\n\n`;
+                  report += `### ${file.replace('.txt', '').replace(/-/g, ' ').toUpperCase()}\n`;
+                  report += `\`\`\`\n${content}\n\`\`\`\n\n`;
+                }
+              }
+            });
+            
+            if (!hasUnusedResources) {
+              report += `✅ **No unused resources detected.**\n\n`;
+            }
+            
+            report += `## 💡 Optimization Recommendations\n\n`;
+            report += `1. **Delete unused EBS volumes** to reduce storage costs\n`;
+            report += `2. **Remove unattached ENIs** to clean up network resources\n`;
+            report += `3. **Delete unused security groups** to maintain security hygiene\n`;
+            report += `4. **Review and optimize instance sizes** based on actual usage\n`;
+            report += `5. **Implement lifecycle policies** for S3 buckets\n`;
+            report += `6. **Use AWS Trusted Advisor** for additional recommendations\n\n`;
+            
+            report += `---\n*This report was generated automatically by GitHub Actions.*`;
+            
+            // Write report to file
+            fs.writeFileSync('optimization-report.md', report);
+            
+            // Comment on PR if this is a pull request
+            if (context.eventName === 'pull_request') {
+              github.rest.issues.createComment({
+                issue_number: context.issue.number,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: report
+              });
+            }
+      
+      - name: Upload Optimization Report
+        uses: actions/upload-artifact@v4
+        with:
+          name: optimization-report-${{ github.run_number }}
+          path: optimization-report.md
+          retention-days: 90 

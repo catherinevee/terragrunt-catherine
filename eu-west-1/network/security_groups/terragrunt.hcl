@@ -2,6 +2,11 @@ include "root" {
   path = find_in_parent_folders("root.hcl")
 }
 
+include "envcommon" {
+  path   = find_in_parent_folders("_envcommon/security_groups.hcl")
+  expose = true
+}
+
 dependency "vpc" {
   config_path = "../../network/vpc"
   
@@ -20,8 +25,24 @@ inputs = {
   description = "Security group for web servers"
   vpc_id      = dependency.vpc.outputs.vpc_id
 
-  ingress_cidr_blocks = ["0.0.0.0/0"]
-  ingress_rules       = ["http-80-tcp", "https-443-tcp"]
+  # Restrict ingress to VPC CIDR only
+  ingress_with_cidr_blocks = [
+    {
+      from_port   = 80
+      to_port     = 80
+      protocol    = "tcp"
+      description = "HTTP from ALB only"
+      cidr_blocks = include.envcommon.locals.security_group_defaults.vpc_cidr
+    },
+    {
+      from_port   = 443
+      to_port     = 443
+      protocol    = "tcp"
+      description = "HTTPS from ALB only"
+      cidr_blocks = include.envcommon.locals.security_group_defaults.vpc_cidr
+    }
+  ]
   
-  egress_rules        = ["all-all"]
+  # Use shared egress rules
+  egress_with_cidr_blocks = include.envcommon.locals.security_group_defaults.web_server_egress
 }

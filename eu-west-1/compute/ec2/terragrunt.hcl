@@ -48,6 +48,7 @@ inputs = {
       encrypted   = true
       volume_type = "gp3"
       volume_size = 20
+      kms_key_id  = get_env("TF_VAR_kms_key_id", "alias/ebs-key")
     }
   ]
   
